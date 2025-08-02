@@ -1,0 +1,22 @@
+name: Compile and Run fcl.h examples
+on: [push, pull_request]
+
+jobs:
+  windows:
+    strategy:
+      matrix:
+        cc: [gcc]
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Compile fcl examples
+        run: ${{ matrix.cc }} -s -O2 -mconsole -march=native -mtune=native -std=c89 -pedantic -nodefaultlibs -nostdlib -mno-stack-arg-probe -Xlinker /STACK:0x100000,0x100000 -fno-builtin -ffreestanding -fno-asynchronous-unwind-tables -fuse-ld=lld -Wall -Wextra -Werror -Wvla -Wconversion -Wdouble-promotion -Wmissing-field-initializers -Wno-uninitialized -Winit-self -Wunused -Wunused-macros -Wunused-local-typedefs examples/fcl_win32_nostdlib.c -o fcl_win32_nostdlib_${{ matrix.cc }}.exe -lkernel32
+      - name: Run fcl examples
+        run: .\fcl_win32_nostdlib_${{ matrix.cc }}.exe
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-${{ matrix.cc }}-fcl_win32_nostdlib
+          path: fcl_win32_nostdlib_${{ matrix.cc }}.exe
