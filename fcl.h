@@ -57,6 +57,27 @@ LICENSE
     (dst)[3] = (src)[3];    \
   } while (0)
 
+#define FCL_COPY_BYTES(dst, src, count)  \
+  do                                     \
+  {                                      \
+    unsigned long _i = 0;                \
+    while (_i + 4 <= (count))            \
+    {                                    \
+      FCL_COPY4((dst) + _i, (src) + _i); \
+      _i += 4;                           \
+    }                                    \
+    while (_i < (count))                 \
+    {                                    \
+      (dst)[_i] = (src)[_i];             \
+      ++_i;                              \
+    }                                    \
+  } while (0)
+
+FCL_API FCL_INLINE unsigned long fcl_hash(unsigned long seq)
+{
+  return ((seq * 2654435761UL) >> (32 - FCL_HASH_LOG)) & (FCL_HASH_SIZE - 1);
+}
+
 FCL_API FCL_INLINE int fcl_compress(
     unsigned char *input,
     unsigned long input_size,
@@ -69,7 +90,6 @@ FCL_API FCL_INLINE int fcl_compress(
   unsigned long i;
   unsigned long literal_len;
 
-  /* Init hash table */
   for (i = 0; i < FCL_HASH_SIZE; ++i)
   {
     hash_table[i] = 0;
@@ -78,47 +98,46 @@ FCL_API FCL_INLINE int fcl_compress(
   while (ip + FCL_MIN_MATCH < input_size)
   {
     unsigned long seq = FCL_READ_U32(&input[ip]);
-    unsigned long hash = ((seq * 2654435761UL) >> (32 - FCL_HASH_LOG)) & (FCL_HASH_SIZE - 1);
+    unsigned long hash = fcl_hash(seq);
     unsigned long ref = hash_table[hash];
+
     hash_table[hash] = (unsigned short)ip;
 
     if (ref < ip &&
         (ip - ref) <= FCL_MAX_DISTANCE &&
         FCL_READ_U32(&input[ref]) == seq)
     {
-      /* Match found */
       unsigned long literal_len = ip - anchor;
       unsigned long match = ref;
       unsigned long match_len = FCL_MIN_MATCH;
       unsigned char token;
+      unsigned char lit;
+      unsigned char mat;
 
       while ((ip + match_len < input_size) && (input[match + match_len] == input[ip + match_len]))
       {
         ++match_len;
+
         if (match_len == FCL_MAX_MATCH)
         {
-          break; /* Avoid long matches */
+          break;
         }
       }
 
-      /* Check space */
       if (op + 1 + literal_len + 2 > output_capacity)
       {
         return 1;
       }
 
-      /* Write token */
-      token = (unsigned char)((literal_len > FCL_MAX_LITERAL ? FCL_MAX_LITERAL : literal_len) << 4);
-      token |= (unsigned char)(match_len - FCL_MIN_MATCH > FCL_MAX_LITERAL ? FCL_MAX_LITERAL : (match_len - FCL_MIN_MATCH));
+      lit = (literal_len < FCL_MAX_LITERAL) ? (unsigned char)literal_len : FCL_MAX_LITERAL;
+      mat = ((match_len - FCL_MIN_MATCH) < FCL_MAX_LITERAL) ? (unsigned char)(match_len - FCL_MIN_MATCH) : FCL_MAX_LITERAL;
+      token = (unsigned char)((lit << 4) | mat);
+
       output[op++] = token;
 
-      /* Copy literals */
-      for (i = 0; i < literal_len; ++i)
-      {
-        output[op++] = input[anchor + i];
-      }
+        (&output[op], &input[anchor], literal_len);
+      op += literal_len;
 
-      /* Write offset */
       FCL_WRITE_U16(&output[op], ip - match);
       op += 2;
 
@@ -131,7 +150,6 @@ FCL_API FCL_INLINE int fcl_compress(
     }
   }
 
-  /* Final literals */
   literal_len = input_size - anchor;
 
   if (op + 1 + literal_len > output_capacity)
@@ -141,10 +159,8 @@ FCL_API FCL_INLINE int fcl_compress(
 
   output[op++] = (unsigned char)(literal_len << 4);
 
-  for (i = 0; i < literal_len; ++i)
-  {
-    output[op++] = input[anchor + i];
-  }
+  FCL_COPY_BYTES(&output[op], &input[anchor], literal_len);
+  op += literal_len;
 
   *output_size = op;
 
@@ -158,9 +174,7 @@ FCL_API FCL_INLINE int fcl_decompress(
     unsigned long *output_size,
     unsigned long output_capacity)
 {
-  unsigned long ip = 0;
-  unsigned long op = 0;
-  unsigned long offset;
+  unsigned long ip = 0, op = 0;
 
   while (ip < input_size)
   {
@@ -168,26 +182,24 @@ FCL_API FCL_INLINE int fcl_decompress(
     unsigned long literal_len = token >> 4;
     unsigned long match_len = (token & 0x0F) + FCL_MIN_MATCH;
     unsigned long i;
-    unsigned long ref;
+    unsigned long offset;
+    unsigned char *src;
+    unsigned char *dst;
 
-    /* Copy literals */
     if (ip + literal_len > input_size || op + literal_len > output_capacity)
     {
       return 1;
     }
 
-    for (i = 0; i < literal_len; ++i)
-    {
-      output[op++] = input[ip++];
-    }
+    FCL_COPY_BYTES(&output[op], &input[ip], literal_len);
+    ip += literal_len;
+    op += literal_len;
 
-    /* End of stream */
     if (ip >= input_size)
     {
       break;
     }
 
-    /* Read offset */
     if (ip + 2 > input_size)
     {
       return 1;
@@ -196,22 +208,27 @@ FCL_API FCL_INLINE int fcl_decompress(
     offset = (unsigned long)(input[ip] | (input[ip + 1] << 8));
     ip += 2;
 
-    if (offset == 0 || offset > op)
+    if (offset == 0 || offset > op || op + match_len > output_capacity)
     {
       return 1;
     }
 
-    if (op + match_len > output_capacity)
+    dst = &output[op];
+    src = &output[op - offset];
+
+    if (offset >= match_len)
     {
-      return 1;
+      FCL_COPY_BYTES(dst, src, match_len);
+    }
+    else
+    {
+      for (i = 0; i < match_len; ++i)
+      {
+        dst[i] = src[i];
+      }
     }
 
-    ref = op - offset;
-
-    for (i = 0; i < match_len; ++i)
-    {
-      output[op++] = output[ref + i];
-    }
+    op += match_len;
   }
 
   *output_size = op;
