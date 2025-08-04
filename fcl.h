@@ -135,7 +135,7 @@ FCL_API FCL_INLINE int fcl_compress(
 
       output[op++] = token;
 
-        (&output[op], &input[anchor], literal_len);
+      FCL_COPY_BYTES(&output[op], &input[anchor], literal_len);
       op += literal_len;
 
       FCL_WRITE_U16(&output[op], ip - match);
