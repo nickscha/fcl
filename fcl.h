@@ -1,4 +1,4 @@
-/* fcl.h - v0.1 - public domain data structures - nickscha 2025
+/* fcl.h - v0.2 - public domain data structures - nickscha 2025
 
 A C89 standard compliant, single header, nostdlib (no C Standard Library) fast compression library (FCL).
 
